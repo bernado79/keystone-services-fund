@@ -97,7 +97,7 @@ func saveData(data []byte) {
 
 	if runningInCloudRun {
 		// Cloud Run mounted volume path
-		directory = "/mnt/gcs-fund-service-cache" // This is the volume path in Cloud Run
+		directory = "/gcs-fund-service-cache" // This is the volume path in Cloud Run
 	} else {
 		// Local testing directory
 		directory = "./gcs-fund-service-cache" // Use a local directory for testing
