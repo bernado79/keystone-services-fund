@@ -33,8 +33,10 @@ import (
 
 type App struct {
 	*http.Server
-	projectID string
-	log       *logging.Logger
+	projectID            string
+	log                  *logging.Logger
+	bucketCacheDirectory string
+	EODAPIKEY            string
 }
 
 func main() {
@@ -102,10 +104,21 @@ func newApp(ctx context.Context, port, projectID string) (*App, error) {
 	}
 	app.log = client.Logger("test-log", logging.RedirectAsJSON(os.Stderr))
 
+	// Check if we are running on Cloud Run (set by an environment variable)
+	if os.Getenv("RUNNING_IN_CLOUD_RUN") == "true" {
+		// Cloud Run mounted volume path
+		app.bucketCacheDirectory = "/gcs-fund-service-cache" // This is the volume path in Cloud Run
+	} else {
+		// Local testing directory
+		app.bucketCacheDirectory = "./gcs-fund-service-cache" // Use a local directory for testing
+	}
+
+	// Set EODAPIKEY
+	app.EODAPIKEY = "67d249e65f7402.22787178"
+
 	// Setup request router.
 	r := mux.NewRouter()
-	r.HandleFunc("/", app.Handler).
-		Methods("GET")
+	r.HandleFunc("/", app.Handler).Methods("GET")
 	app.Server.Handler = r
 
 	return app, nil

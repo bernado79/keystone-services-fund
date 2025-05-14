@@ -35,6 +35,11 @@ type StockData struct {
 	Volume   int64   `json:"volume"`
 }
 
+type IndexData struct {
+	Date     string  `json:"date"`
+	AdjClose float64 `json:"adjusted_close"`
+}
+
 func (a *App) Handler(w http.ResponseWriter, r *http.Request) {
 	// a.log.Log(logging.Entry{
 	// 	Severity: logging.Info,
@@ -44,82 +49,173 @@ func (a *App) Handler(w http.ResponseWriter, r *http.Request) {
 	// 	Payload: "Structured logging example.",
 	// })
 
-	// URL of the EOD Historical API (replace with the actual endpoint)
-	url := "https://eodhd.com/api/eod/VOO.US?api_token=67d249e65f7402.22787178&fmt=json&from=2020-01-01"
+	// Get the symbol from the URL query parameters
+	stockDataVOO, err := a.PrepareSymbolJSONData("VOO.US", "2019-01-02")
+	if err != nil {
+		log.Fatal("Error preparing symbol JSON data:", err)
+	}
 
-	// Send a GET request to the EOD Historical API
+	stockDataBTC, err := a.PrepareSymbolJSONData("BTC-USD.CC", "2019-01-02")
+	if err != nil {
+		log.Fatal("Error preparing symbol JSON data:", err)
+	}
+
+	stockDataVOOFF := forwardFillStockData(stockDataVOO, "2019-01-02", stockDataBTC[len(stockDataBTC)-1].Date)
+
+	// Create a map to store the stock data by date
+	stockDataVOOMap := make(map[string]StockData)
+	for _, data := range stockDataVOOFF {
+		stockDataVOOMap[data.Date] = data
+	}
+
+	ratioVOO := 9
+	ratioBTC := 1
+	stockDataIndex := make([]IndexData, 0)
+
+	// Calculate index at the start
+	stockDataIndex = append(stockDataIndex, IndexData{
+		Date:     stockDataBTC[0].Date,
+		AdjClose: 100,
+	})
+	initialIndexValue := (stockDataBTC[0].AdjClose * float64(ratioBTC)) + (stockDataVOOFF[0].AdjClose * float64(ratioVOO))
+
+	for i := 1; i < len(stockDataBTC); i++ {
+		currentIndexValue := (stockDataBTC[i].AdjClose * float64(ratioBTC)) + (stockDataVOOFF[i].AdjClose * float64(ratioVOO))
+		indexValue := (currentIndexValue / initialIndexValue) * 100
+		stockDataIndex = append(stockDataIndex, IndexData{
+			Date:     stockDataBTC[i].Date,
+			AdjClose: indexValue,
+		})
+	}
+
+	// Return stockDataIndex as JSON
+	jsonIndexData, err := json.Marshal(stockDataIndex)
+	if err != nil {
+		log.Fatal("Error marshalling JSON data:", err)
+	}
+
+	fmt.Fprintf(w, "%s", jsonIndexData)
+}
+
+func (a *App) PrepareSymbolJSONData(symbol string, startDate string) ([]StockData, error) {
+	// URL of the EOD Historical API (replace with the actual endpoint)
+	url := "https://eodhd.com/api/eod/" + symbol + "?api_token=" + a.EODAPIKEY + "&fmt=json&from=" + startDate
+
+	currentUTCDate := time.Now().UTC().Format(time.DateOnly)
+	directory := a.bucketCacheDirectory + "/" + symbol
+	fileName := currentUTCDate + ".json"
+	fullPath := a.bucketCacheDirectory + "/" + symbol + "/" + currentUTCDate + ".json"
+
+	// Check if the file exists
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		// If the file does not exist, read data from the URL
+		body, err := readDataFromURL(url)
+		if err != nil {
+			log.Fatal("Error reading data from URL:", err)
+		}
+		// Parse the JSON data into a slice of StockData
+		var stockData []StockData
+		err = json.Unmarshal(body, &stockData)
+		if err != nil {
+			log.Fatal("Error unmarshalling JSON data:", err)
+		}
+
+		// Save the data to a file
+		saveData(body, directory, fileName)
+		if err != nil {
+			log.Fatal("Error saving data to file:", err)
+		}
+
+		// Confirm successful write
+		fmt.Printf("Data successfully saved to '%s'\n", fullPath)
+	}
+
+	// If the file exists, read data from the file
+	fileData, err := os.ReadFile(fullPath)
+	if err != nil {
+		log.Fatal("Error reading data from file:", err)
+	}
+
+	// Parse the JSON data into a slice of StockData
+	var stockData []StockData
+	err = json.Unmarshal(fileData, &stockData)
+	if err != nil {
+		log.Fatal("Error unmarshalling JSON data from file:", err)
+	}
+
+	// Return the JSON data
+	return stockData, nil
+}
+
+// Function to forward fill the StockData slice for missing inbetween dates from the start date to the end date。 FF based on the last available data from the previous date
+func forwardFillStockData(stockData []StockData, startDate string, endDate string) []StockData {
+	// Create a map to store the stock data by date
+	stockDataMap := make(map[string]StockData)
+	for _, data := range stockData {
+		stockDataMap[data.Date] = data
+	}
+
+	// Create a slice to hold the forward-filled data
+	var filledData []StockData
+
+	// Iterate through the date range and fill in missing dates
+	currentDate := startDate
+	for currentDate <= endDate {
+		if data, exists := stockDataMap[currentDate]; exists {
+			filledData = append(filledData, data)
+		} else {
+			// If the date does not exist, use the last available data
+			if len(filledData) > 0 {
+				lastData := filledData[len(filledData)-1]
+				data := StockData{
+					Date:     currentDate,
+					Open:     lastData.Open,
+					High:     lastData.High,
+					Low:      lastData.Low,
+					Close:    lastData.Close,
+					AdjClose: lastData.AdjClose,
+					Volume:   lastData.Volume,
+				}
+				filledData = append(filledData, data)
+			}
+		}
+		currentDate = incrementDate(currentDate)
+	}
+
+	return filledData
+}
+
+// Function to read data from URL and return body
+func readDataFromURL(url string) ([]byte, error) {
+	// Send a GET request to the URL
 	resp, err := http.Get(url)
 	if err != nil {
-		log.Fatal("Error fetching data:", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	// Read the body of the response
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal("Error reading response body:", err)
+		return nil, err
 	}
 
-	// Parse the JSON data into a slice of StockData
-	var stockData []StockData
-	err = json.Unmarshal(body, &stockData)
-	if err != nil {
-		log.Fatal("Error unmarshalling JSON data:", err)
-	}
-
-	// // Output the data in JSON format
-	// stockDataJSON, err := json.MarshalIndent(stockData, "", "  ")
-	// if err != nil {
-	// 	log.Fatal("Error marshalling JSON:", err)
-	// }
-
-	// Output only the first dataset in JSON format
-	if len(stockData) > 0 {
-		firstStockDataJSON, err := json.MarshalIndent(stockData[0], "", "  ")
-		if err != nil {
-			log.Fatal("Error marshalling JSON:", err)
-		}
-
-		// Print the first record as marshaled JSON
-		// fmt.Println(string(firstStockDataJSON))
-		saveData(firstStockDataJSON)
-		fmt.Fprint(w, string(firstStockDataJSON))
-	} else {
-		fmt.Println("No data found.")
-	}
+	return body, nil
 }
 
-func saveData(data []byte) {
-	// Check if we are running on Cloud Run (set by an environment variable)
-	runningInCloudRun := os.Getenv("RUNNING_IN_CLOUD_RUN") == "true"
-
-	var directory string
-
-	if runningInCloudRun {
-		// Cloud Run mounted volume path
-		directory = "/gcs-fund-service-cache" // This is the volume path in Cloud Run
-	} else {
-		// Local testing directory
-		directory = "./gcs-fund-service-cache" // Use a local directory for testing
-	}
-
+// saveData saves the JSON data to a file in a specific directory
+// filename optional, if not provided, a default name will be used
+func saveData(data []byte, fileDirectory string, fileName string) {
 	// Ensure the directory exists, create it if it doesn't
-	if _, err := os.Stat(directory); os.IsNotExist(err) {
-		err := os.MkdirAll(directory, os.ModePerm)
+	if _, err := os.Stat(fileDirectory); os.IsNotExist(err) {
+		err := os.MkdirAll(fileDirectory, os.ModePerm)
 		if err != nil {
 			log.Fatal("Error creating directory:", err)
 		}
 	}
 
-	// Get the current time in GMT (UTC)
-	currentTime := time.Now().UTC()
-
-	// Create a unique file name for each request (e.g., using a UUID)
-	// fileName := fmt.Sprintf("stock_data_%s.json", uuid.New().String())
-	fileName := fmt.Sprintf("stock_data_%s.json", currentTime.Format("2006-01-02T15-04-05Z"))
-
 	// Combine directory with file name to get the full file path
-	filePath := fmt.Sprintf("%s/%s", directory, fileName)
+	filePath := fmt.Sprintf("%s/%s", fileDirectory, fileName)
 
 	// Create or open the file for writing
 	file, err := os.Create(filePath)
@@ -136,4 +232,14 @@ func saveData(data []byte) {
 
 	// Confirm successful write
 	fmt.Printf("Data successfully saved to '%s'\n", filePath)
+}
+
+// incrementDate increments a date string by one day.
+func incrementDate(date string) string {
+	t, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return "" // Handle error appropriately in real application
+	}
+	t = t.AddDate(0, 0, 1)
+	return t.Format(time.DateOnly)
 }
