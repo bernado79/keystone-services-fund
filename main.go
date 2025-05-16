@@ -118,7 +118,8 @@ func newApp(ctx context.Context, port, projectID string) (*App, error) {
 
 	// Setup request router.
 	r := mux.NewRouter()
-	r.HandleFunc("/", app.Handler).Methods("GET")
+
+	r.HandleFunc("/{symbol}", app.Handler).Methods("GET")
 	app.Server.Handler = r
 
 	return app, nil

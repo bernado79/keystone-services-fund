@@ -21,7 +21,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
+
+	"cloud.google.com/go/logging"
+	"github.com/gorilla/mux"
 )
 
 // Define a struct to match the expected data structure from the endpoint
@@ -41,13 +45,45 @@ type IndexData struct {
 }
 
 func (a *App) Handler(w http.ResponseWriter, r *http.Request) {
-	// a.log.Log(logging.Entry{
-	// 	Severity: logging.Info,
-	// 	HTTPRequest: &logging.HTTPRequest{
-	// 		Request: r,
-	// 	},
-	// 	Payload: "Structured logging example.",
-	// })
+	a.log.Log(logging.Entry{
+		Severity: logging.Info,
+		HTTPRequest: &logging.HTTPRequest{
+			Request: r,
+		},
+		Payload: "Request received",
+	})
+
+	// get the /{symbol} from the URL
+	vars := mux.Vars(r)
+	symbol := vars["symbol"]
+
+	ratioVOO := 9
+	ratioBTC := 1
+
+	// Check if the symbol is not provided
+	if symbol == "" {
+		http.Error(w, "Symbol is required", http.StatusBadRequest)
+		return
+	}
+
+	// Case insensitive check for the symbol
+	symbol = strings.ToUpper(symbol)
+
+	// Switch case to handle different symbols
+	switch symbol {
+	case "QUARTZ9":
+		ratioVOO = 9
+		ratioBTC = 1
+	case "QUARTZ7":
+		ratioVOO = 7
+		ratioBTC = 3
+	case "QUARTZ5":
+		ratioVOO = 5
+		ratioBTC = 5
+	default:
+		http.Error(w, "Invalid symbol", http.StatusBadRequest)
+		return
+	}
 
 	// Get the symbol from the URL query parameters
 	stockDataVOO, err := a.PrepareSymbolJSONData("VOO.US", "2019-01-02")
@@ -68,8 +104,6 @@ func (a *App) Handler(w http.ResponseWriter, r *http.Request) {
 		stockDataVOOMap[data.Date] = data
 	}
 
-	ratioVOO := 9
-	ratioBTC := 1
 	stockDataIndex := make([]IndexData, 0)
 
 	// Calculate index at the start
@@ -93,6 +127,12 @@ func (a *App) Handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatal("Error marshalling JSON data:", err)
 	}
+
+	// set the content type to JSON
+	w.Header().Set("Content-Type", "application/json")
+
+	// Allow for cross-origin requests from any origin
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	fmt.Fprintf(w, "%s", jsonIndexData)
 }
